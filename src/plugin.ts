@@ -1,4 +1,4 @@
-import type { Plugin, ToolDefinition } from "@opencode-ai/plugin";
+import { Plugin } from "@opencode/plugin";
 
 import {
   buildJournalSystemNote,
@@ -15,86 +15,78 @@ import {
   MemoryReplace,
   MemorySet,
 } from "./tools";
-import type { JournalContext } from "./tools";
+import type { JournalContext, MemoryToolDefinition } from "./tools";
 
-export const MemoryPlugin: Plugin = async ({ directory, client }) => {
-  const config = await loadConfig(undefined, (message) => {
-    void client.app.log({
-      body: { service: "agent-memory", level: "warn", message },
-    }).catch(() => {});
-  });
-  const disableGlobal = config.memory?.disable_global === true;
+export default Plugin.define({
+  id: "opencode-agent-memory",
+  async setup(ctx) {
+    const directory = ctx.location.directory;
 
-  const store = createMemoryStore(directory, { disableGlobal });
-  await store.ensureSeed();
+    const config = await loadConfig(undefined, (message) => {
+      console.warn(`[agent-memory] ${message}`);
+    });
+    const disableGlobal = config.memory?.disable_global === true;
 
-  // Journal: opt-in via ~/.config/opencode/agent-memory.json
-  const journalEnabled = config.journal?.enabled === true;
+    const store = createMemoryStore(directory, { disableGlobal });
+    await store.ensureSeed();
 
-  // Mutable state updated by chat.message hook
-  const journalCtx: JournalContext = {
-    directory,
-    model: "",
-    provider: "",
-  };
+    // Journal: opt-in via ~/.config/opencode/agent-memory.json
+    const journalEnabled = config.journal?.enabled === true;
 
-  let journalTools: Record<string, ToolDefinition> = {};
-  let journalSystemNote = "";
-
-  if (journalEnabled) {
-    const journalStore = createJournalStore();
-    journalTools = {
-      journal_write: JournalWrite(journalStore, journalCtx),
-      journal_read: JournalRead(journalStore),
-      journal_search: JournalSearch(journalStore),
+    // Mutable state updated by the session "context" hook
+    const journalCtx: JournalContext = {
+      directory,
+      model: "",
+      provider: "",
     };
-    journalSystemNote = buildJournalSystemNote(config.journal?.tags);
-  }
 
-  return {
-    "chat.message": async (input, _output) => {
-      if (input.model) {
-        journalCtx.model = input.model.modelID;
-        journalCtx.provider = input.model.providerID;
-      }
-    },
+    let journalSystemNote = "";
+    const journalTools: MemoryToolDefinition[] = [];
 
-    "experimental.chat.system.transform": async (_input, output) => {
+    if (journalEnabled) {
+      const journalStore = createJournalStore();
+      journalTools.push(
+        JournalWrite(journalStore, journalCtx),
+        JournalRead(journalStore),
+        JournalSearch(journalStore),
+      );
+      journalSystemNote = buildJournalSystemNote(config.journal?.tags);
+    }
+
+    // One hook covers both V1 behaviors: capturing the resolved model for
+    // journal metadata, and injecting rendered memory blocks into the system
+    // prompt. All async loading happens before registration; the callback
+    // itself stays cheap and replayable.
+    await ctx.session.hook("context", async (event) => {
+      journalCtx.model = event.model.id;
+      journalCtx.provider = event.model.providerID;
+
       const blocks = await store.listBlocks("all");
       const xml = renderMemoryBlocks(blocks, { disableGlobal });
       if (!xml) return;
 
       // Insert early (right after provider header) for salience.
       // OpenCode will re-join system chunks to preserve caching.
-      const insertAt = output.system.length > 0 ? 1 : 0;
-      output.system.splice(insertAt, 0, xml);
+      const insertAt = event.system.length > 0 ? 1 : 0;
+      event.system.splice(insertAt, 0, { type: "text", text: xml });
 
       // Append journal instructions at the end (preserves memory block cache)
       if (journalSystemNote) {
-        output.system.push(journalSystemNote);
+        event.system.push({ type: "text", text: journalSystemNote });
       }
-    },
+    });
 
-    tool: {
-      memory_list: MemoryList(store, { disableGlobal }),
-      memory_set: MemorySet(store, { disableGlobal }),
-      memory_replace: MemoryReplace(store, { disableGlobal }),
+    const tools: MemoryToolDefinition[] = [
+      MemoryList(store, { disableGlobal }),
+      MemorySet(store, { disableGlobal }),
+      MemoryReplace(store, { disableGlobal }),
       ...journalTools,
-    },
-  };
-};
+    ];
 
-// OpenCode 2.x loads plugins through the V2 definition shape. Keep the V1
-// factory above exported for the unit/smoke tests and wrap it for the server
-// loader. The returned hook map is consumed by the compatibility loader.
-const pluginDefinition = {
-  id: "opencode-agent-memory",
-  async setup({ location, client }: { location?: { directory?: string }; client?: unknown }) {
-    return MemoryPlugin({
-      directory: location?.directory ?? process.cwd(),
-      client,
-    } as Parameters<Plugin>[0]);
+    await ctx.tool.transform((editor) => {
+      for (const tool of tools) {
+        editor.add(tool);
+      }
+    });
   },
-};
-
-export default pluginDefinition;
+});
