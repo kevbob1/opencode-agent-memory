@@ -83,3 +83,18 @@ export const MemoryPlugin: Plugin = async ({ directory, client }) => {
     },
   };
 };
+
+// OpenCode 2.x loads plugins through the V2 definition shape. Keep the V1
+// factory above exported for the unit/smoke tests and wrap it for the server
+// loader. The returned hook map is consumed by the compatibility loader.
+const pluginDefinition = {
+  id: "opencode-agent-memory",
+  async setup({ location, client }: { location?: { directory?: string }; client?: unknown }) {
+    return MemoryPlugin({
+      directory: location?.directory ?? process.cwd(),
+      client,
+    } as Parameters<Plugin>[0]);
+  },
+};
+
+export default pluginDefinition;

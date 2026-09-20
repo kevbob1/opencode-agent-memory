@@ -5,9 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createMemoryStore } from "./memory";
-import { MemoryPlugin } from "./plugin";
+import pluginDefinition, { MemoryPlugin } from "./plugin";
 
 describe("memory plugin configuration", () => {
+  test("exports an OpenCode V2 plugin definition", () => {
+    expect(pluginDefinition.id).toBe("opencode-agent-memory");
+    expect(typeof pluginDefinition.setup).toBe("function");
+  });
+
   let home: string;
   let directory: string;
   let configDir: string;
