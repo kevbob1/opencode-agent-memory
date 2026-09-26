@@ -20,7 +20,7 @@ For background on the memory concept, see Letta's docs on [memory](https://docs.
 
 ## Requirements
 
-- [OpenCode](https://opencode.ai/) v1.0.115 or later
+- [OpenCode](https://opencode.ai/) v2 or later
 
 ## Installation
 
@@ -38,7 +38,7 @@ Optionally, pin to a specific version for stability:
 
 ```json
 {
-  "plugin": ["opencode-agent-memory@0.2.0"]
+  "plugin": ["opencode-agent-memory@2.0.0"]
 }
 ```
 
